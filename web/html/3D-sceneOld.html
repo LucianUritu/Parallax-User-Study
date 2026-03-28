@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Three.js Parallax Demo</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <div id ="status">
+    <div>Connection: <span id="connection-status">Connecting...</span></div>
+    <div>Gaze Direction: <span id="gaze-direction">-</span></div>
+    <div>Position: <span id="gaze-position">-</span></div>
+  </div>
+  <!-- Load Three.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.0/build/three.min.js"></script>
+
+  <script>
+    // Scene Setup
+    const scene = new THREE.Scene();
+
+    // Camera (75° FOV, aspect ratio, near, far)
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.z = 5;
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Layers (foreground, midground, background)
+    const materials = [
+      new THREE.MeshBasicMaterial({ color: 0xff4444 }), // red = foreground
+      new THREE.MeshBasicMaterial({ color: 0x44ff44 }), // green = midground
+      new THREE.MeshBasicMaterial({ color: 0x4444ff })  // blue = background
+    ];
+
+    // Foreground cube (close to camera)
+    const cube1 = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), materials[0]);
+    cube1.position.set(-4,0,-1);  // close
+    scene.add(cube1);
+
+    // Midground cube
+    const cube2 = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), materials[1]);
+    cube2.position.set(0, 0, -2);  // further back
+    scene.add(cube2);
+
+    // Background cube
+    const cube3 = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), materials[2]);
+    cube3.position.set(4, 0, -3);  // far away
+    scene.add(cube3);
+
+    // ---- Eye Tracking ----
+    let eyeX = 0, eyeY = 0;
+    let gazeDirection = "center";
+
+    const socket= new WebSocket('ws://localhost:8765/');
+    socket.onopen = function(event) {
+      document.getElementById('connection-status').textContent = 'Connected';
+      document.getElementById('connection-status').style.color = 'lightgreen';
+    };
+
+    socket.onmessage = function(event) {
+      try{
+        const data = JSON.parse(event.data);
+        eyeX = data.x;
+        eyeY = data.y;
+        gazeDirection = data.direction;
+        
+        document.getElementById('gaze-direction').textContent = gazeDirection;
+        document.getElementById('gaze-position').textContent = `X: ${eyeX.toFixed(2)}, Y: ${eyeY.toFixed(2)}`;
+      } catch (e) {
+        console.error('Error parsing Websocket data:', e);
+      }
+    };
+
+    socket.onclose = function(event) {
+      document.getElementById('connection-status').textContent = 'Disconnected';
+      document.getElementById('connection-status').style.color = 'red';
+    };
+
+    socket.onerror = function(error) {
+      console.error('WebSocket Error: ', error);
+      document.getElementById('connection-status').textContent = 'Error';
+      document.getElementById('connection-status').style.color = 'red';
+    };
+
+    // Handle Mouse Movement (simulating eye/head tracking)
+    let mouseX = 0, mouseY = 0;
+    document.addEventListener('mousemove', (event) => {
+      mouseX = (event.clientX / window.innerWidth) - 0.5;
+      mouseY = (event.clientY / window.innerHeight) - 0.5;
+    });
+
+    // This makes the movement of the cubes smoother
+    let smoothX = 0, smoothY = 0;
+    const smoothing = 0.05; // smaller = smoother
+
+    // Animation Loop
+    function animate() {
+      requestAnimationFrame(animate);
+
+      let controlX = socket.readyState === WebSocket.OPEN ? eyeX * 0.5 : mouseX;
+      let controlY = socket.readyState === WebSocket.OPEN ? -eyeY * 0.5 : -mouseY;
+
+      // Move cubes based on eye position (parallax effect)
+      smoothX += (controlX - smoothX) * smoothing;
+      smoothY += (controlY - smoothY) * smoothing;
+
+      cube1.position.x = smoothX * 2; // First cube moves fastest
+      cube1.position.y = smoothY * 2;
+
+      cube2.position.x = smoothX * 1; // Second cube moves slower
+      cube2.position.y = smoothY * 1;
+
+      cube3.position.x = smoothX * 0.5; // Third cube moves even slower
+      cube3.position.y = smoothY * 0.5;
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // Handle Window Resize
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>

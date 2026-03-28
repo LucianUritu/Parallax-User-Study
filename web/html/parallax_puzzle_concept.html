@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Three.js Parallax NY Scene</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+
+<body>
+  <div id="status" style="position:fixed;left:10px;top:10px;color:#fff;z-index:1000;">
+    <div>Connection: <span id="connection-status">Connecting...</span></div>
+    <div>Gaze Direction: <span id="gaze-direction">-</span></div>
+    <div>Position: <span id="gaze-position">-</span></div>
+  </div>
+
+  <!-- Load Three.js -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.152.0/build/three.min.js"></script>
+
+  <script>
+  // Scene setup
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+  camera.position.z = 5;
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  const loader = new THREE.TextureLoader();
+  function createLayer(filename, zPos, visibleHeight) {
+    const tex = loader.load(filename);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const aspect = 1920 / 1080;
+    const height = visibleHeight;
+    const width  = height * aspect;
+    const geo = new THREE.PlaneGeometry(width, height);
+    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.z = zPos;
+    scene.add(mesh);
+    return mesh;
+  }
+  function createAutoBackground(filename, zPos, scale=1.05) {
+    const tex = loader.load(filename);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
+    mesh.position.z = zPos;
+    scene.add(mesh);
+    function resizeBackground() {
+      const dist = Math.abs(zPos - camera.position.z);
+      const vFov = camera.fov * Math.PI / 180;
+      const height = 2 * Math.tan(vFov / 2) * dist;
+      const width = height * camera.aspect;
+      mesh.scale.set(width * scale, height * scale, 1);
+    }
+    resizeBackground();
+    window.addEventListener("resize", resizeBackground);
+    return mesh;
+  }
+
+  // Create layers
+  const backgroundLayer = createAutoBackground("ny_sky.png", -12, 1.05);
+  const buildingLayer = createLayer("ny_buildings.png", -12, 30);
+  const statueLayer = createLayer("ny_statue.png", -11, 27);
+
+
+  const backgroundPos = { x: 0,    y: 0 };
+  const buildingPos = { x: 0, y: 0.6 };
+  const statuePos = { x: 0.5,   y: -0.5 };
+
+
+
+  // Eye Tracking + Mouse Fallback (single declarations)
+  let eyeX = 0, eyeY = 0;
+  let mouseX = 0, mouseY = 0;
+  let smoothX = 0, smoothY = 0;
+
+  document.addEventListener("mousemove", (e) => {
+    mouseX = (e.clientX / window.innerWidth) - 0.5;
+    mouseY = (e.clientY / window.innerHeight) - 0.5;
+  });
+
+  // Single WebSocket instance and handlers
+  const socket = new WebSocket("ws://localhost:8765/");
+
+  socket.onopen = () => {
+    const el = document.getElementById('connection-status');
+    if (el) { el.textContent = 'Connected'; el.style.color = 'lightgreen'; }
+  };
+
+  socket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (typeof data.x === 'number') eyeX = data.x;
+      if (typeof data.y === 'number') eyeY = data.y;
+      const dirEl = document.getElementById('gaze-direction');
+      const posEl = document.getElementById('gaze-position');
+      if (dirEl) dirEl.textContent = data.direction ?? '-';
+      if (posEl) posEl.textContent = `X: ${(data.x ?? 0).toFixed(2)}, Y: ${(data.y ?? 0).toFixed(2)}`;
+    } catch (e) {
+      console.error('WS parse error', e);
+    }
+  };
+
+  socket.onclose = () => {
+    const el = document.getElementById('connection-status');
+    if (el) { el.textContent = 'Disconnected'; el.style.color = 'red'; }
+  };
+
+  socket.onerror = (err) => {
+    const el = document.getElementById('connection-status');
+    if (el) { el.textContent = 'Error'; el.style.color = 'red'; }
+    console.error('WebSocket error', err);
+  };
+
+  // Animation loop
+  function animate() {
+    requestAnimationFrame(animate);
+    const useEyeTracking = (socket.readyState === WebSocket.OPEN);
+    const targetX = useEyeTracking ? eyeX : mouseX;
+    const targetY = useEyeTracking ? -eyeY : -mouseY;
+    smoothX += (targetX - smoothX) * 0.07;
+    smoothY += (targetY - smoothY) * 0.07;
+    const px = smoothX, py = smoothY;
+    statueLayer.position.x = statuePos.x + px * 1.4;
+    statueLayer.position.y = statuePos.y + py * 0.9;
+    buildingLayer.position.x = buildingPos.x + px * 1;
+    buildingLayer.position.y = buildingPos.y + py * 0.9;
+    backgroundLayer.position.x = backgroundPos.x + px * 0.07;
+    backgroundLayer.position.y = backgroundPos.y + py * 0.05;
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  // Resize handling
+  window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+  </script>
+</body>
+</html>

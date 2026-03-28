@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Focus Task - Visual Load Study</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="status">
+  <div>Connection: <span id="connection-status">Connecting...</span></div>
+  <div>Gaze: <span id="gaze-direction">-</span></div>
+  <div>Position: <span id="gaze-position">-</span></div>
+  <br>
+  <div>Responsiveness</div>
+  <input id="speedSlider" type="range" min="0" max="3" step="0.01" value="1">
+  <br><br>
+  <div id="levelDisplay"></div>
+  <div style="color: #ffaa00; margin-top: 5px;">
+    Particles: <span id="particleCount">0</span>
+  </div>
+</div>
+
+<!-- Instruction Screen -->
+<div id="instructionPanel">
+  <h1>Focus Task</h1>
+  <p>Find and maintain focus on the <span class="highlight">yellow circle</span> somewhere on the screen(Random Position).</p>
+  <p><strong>How it works:</strong></p>
+  <p>Use your <span class="highlight">eyes (or mouse)</span> to look at the target</p>
+  <p>When you're <span class="highlight">focused correctly</span>, the circle turns <span class="highlight">GREEN</span></p>
+  <p>Keep focus for <span class="highlight">3 seconds on green</span> to complete the task</p>
+  <p style="margin-top: 30px; color: #ffaa00; font-size: 14px;">The challenge increases each level. Particles will distract you. Stay focused!</p>
+  <div id="levelDisplay"></div>
+  <button class="startTaskButton" onclick="startTask()">
+    Start Task
+    <div class="icon">
+    <svg
+      height="24"
+      width="24"
+      viewBox="0 0 24 24"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M0 0h24v24H0z" fill="none"></path>
+      <path
+        d="M16.172 11l-5.364-5.364 1.414-1.414L20 12l-7.778 7.778-1.414-1.414L16.172 13H4v-2z"
+        fill="currentColor"
+      ></path>
+    </svg>
+  </div>
+  </button>
+</div>
+
+<!-- Focus Display (during task) -->
+<div id="focusDisplay">
+  <div class="focusCircle" id="focusCircle">
+    <div id="focusQuality">0%</div>
+  </div>
+
+  <div id="gazeCursor"></div>
+</div>
+
+
+
+<!-- Results Screen -->
+<div id="resultsPanel">
+  <h2 id="resultTitle">Task Complete!</h2>
+  <div class="resultMetric"><strong>Time to Focus:</strong> <span id="timeToFocus">-</span>s</div>
+  <div class="resultMetric"><strong>Maintenance Time:</strong> <span id="maintenanceTime">-</span>s</div>
+  <div class="resultMetric"><strong>Focus Losses:</strong> <span id="focusLosses">0</span></div>
+  <div class="resultMetric"><strong>Level:</strong> <span id="resultLevel">-</span></div>
+  <div class="resultMetric"><strong>Comfort Rating:</strong> <input type="range" id="comfortRating" min="1" max="10" value="5"> <span id="comfortValue">5</span>/10</div>
+  <button class="submitResultsButton" onclick="submitResults()">Submit & Next Level</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.0/build/three.min.js"></script>
+<script>
+
+    // Red dot activated by eye-tracking
+    let cursorX = 0;   // smoothed X for gaze dot
+    let cursorY = 0;   // smoothed Y for gaze dot
+    const CURSOR_SMOOTHING = 0.25; // lower = faster, higher = smoother
+
+  // ==================== EXPERIMENT SYSTEM ====================
+  const ExperimentSystem = {
+    levels: [
+      { level: 1, name: "No Particles", particleCount: 0, color: "levelColor1" },
+      { level: 2, name: "Few Particles", particleCount: 500, color: "levelColor2" },
+      { level: 3, name: "More Particles", particleCount: 1000, color: "levelColor3" },
+      { level: 4, name: "Many Particles", particleCount: 1500, color: "levelColor4" },
+      { level: 5, name: "Impossible", particleCount: 2000, color: "levelColor5" }
+    ],
+
+    currentLevelIndex: 0,
+    taskLog: [],
+
+    getCurrentLevel() {
+      return this.levels[this.currentLevelIndex % this.levels.length];
+    },
+
+    logTask(result) {
+      const level = this.getCurrentLevel();
+      const entry = {
+        timestamp: new Date().toISOString(),
+        level: level.level,
+        levelName: level.name,
+        particleCount: level.particleCount,
+        timeToFocus: result.timeToFocus,
+        maintenanceTime: result.maintenanceTime,
+        focusLosses: result.focusLosses,
+        comfortRating: result.comfortRating,
+        totalTime: result.totalTime,
+        success: result.success
+      };
+      this.taskLog.push(entry);
+      console.log("Task result:", entry);
+    },
+
+    nextLevel() {
+      this.currentLevelIndex++;
+    },
+
+    exportLog() {
+      return JSON.stringify(this.taskLog, null, 2);
+    }
+  };
+
+  // ==================== 3D SCENE ====================
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000000);
+
+  const camera = new THREE.PerspectiveCamera(
+    75, window.innerWidth / window.innerHeight, 0.1, 2000
+  );
+  camera.position.z = 2;
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setClearColor(0x000000, 1);
+  document.body.appendChild(renderer.domElement);
+
+  const room = new THREE.Mesh(
+    new THREE.BoxGeometry(20, 20, 20),
+    new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.BackSide })
+  );
+  scene.add(room);
+
+  let responsiveness = 1;
+  document.getElementById("speedSlider").addEventListener("input", (e) => {
+    responsiveness = Number(e.target.value);
+  });
+
+  const cubes = [];
+  const cubePos = [[-3, 0, -2], [2, 1, -5], [-2, -1, -8]];
+  const cubeSpeeds = [2, 1, 0.5];
+
+  function getGazeColor(x, y) {
+    const h = ((x + 0.5) * 360) % 360;
+    const c = new THREE.Color();
+    c.setHSL(h / 360, 1.0, 0.5);
+    return c;
+  }
+
+  for (let i = 0; i < 3; i++) {
+    const mat = new THREE.MeshBasicMaterial({ color: getGazeColor(0, 0) });
+    const cube = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), mat);
+    cube.position.set(...cubePos[i]);
+    const edges = new THREE.EdgesGeometry(cube.geometry);
+    cube.add(new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xffffff })));
+    scene.add(cube);
+    cubes.push({ mesh: cube, mat, speed: cubeSpeeds[i] });
+  }
+
+  const particles = [];
+
+  function addParticle() {
+    const size = Math.random() * 0.08 + 0.02;
+    const p = new THREE.Mesh(
+      new THREE.SphereGeometry(size),
+      new THREE.MeshBasicMaterial({ color: 0xffffff })
+    );
+    p.position.set((Math.random() - 0.5) * 15, (Math.random() - 0.5) * 15, (Math.random() - 0.5) * 15);
+    p.velocity = {
+      x: (Math.random() - 0.5) * 0.05,
+      y: (Math.random() - 0.5) * 0.05,
+      z: (Math.random() - 0.5) * 0.05
+    };
+    scene.add(p);
+    particles.push(p);
+  }
+
+  function setParticleCount(target) {
+    while (particles.length < target) addParticle();
+    while (particles.length > target) {
+      const p = particles.pop();
+      scene.remove(p);
+      p.geometry.dispose();
+      p.material.dispose();
+    }
+    document.getElementById("particleCount").textContent = target;
+  }
+
+  // ==================== TASK SYSTEM ====================
+
+  let taskActive = false;
+  let taskStartTime = null;
+  let focusStartTime = null;
+  let focusAchieved = false;
+  let focusLosses = 0;
+  let lastFocusQuality = 0;
+
+
+  let SWEET_SPOT_X = 0;
+  let SWEET_SPOT_Y = 0;
+  const FOCUS_RADIUS = 0.25;
+  const REQUIRED_FOCUS_TIME = 3000;
+  const FOCUS_THRESHOLD = 0.8; 
+
+  function calculateFocusQuality(gazeX, gazeY) {
+    const distX = Math.abs(gazeX - SWEET_SPOT_X);
+    const distY = Math.abs(gazeY - SWEET_SPOT_Y);
+    const distance = Math.sqrt(distX * distX + distY * distY);
+    const quality = Math.max(0, 1.0 - (distance / FOCUS_RADIUS));
+    return quality;
+  }
+
+  function updateFocusDisplay(quality) {
+    const circle = document.getElementById("focusCircle");
+    const qualityText = document.getElementById("focusQuality");
+    const percentage = Math.round(quality * 100);
+    qualityText.textContent = percentage + "%";
+
+    circle.classList.remove("perfect", "good", "poor");
+    qualityText.classList.remove("perfect", "good", "poor");
+    
+    if (quality > 0.85) {
+      circle.classList.add("perfect");
+      qualityText.classList.add("perfect");
+    } else if (quality > 0.6) {
+      circle.classList.add("good");
+      qualityText.classList.add("good");
+    } else {
+      circle.classList.add("poor");
+      qualityText.classList.add("poor");
+    }
+  }
+
+  function updateLevelDisplay() {
+    const level = ExperimentSystem.getCurrentLevel();
+    const levelDisplay = `<span class="${level.color}">Level ${level.level}: ${level.name}</span>`;
+    document.getElementById("levelDisplay").innerHTML = levelDisplay;
+  }
+
+  function setRandomFocusTarget() {
+  // Safe range so the circle never goes off screen
+  const RANGE_X = 0.35;
+  const RANGE_Y = 0.35;
+
+  SWEET_SPOT_X = (Math.random() * 2 - 1) * RANGE_X;
+  SWEET_SPOT_Y = (Math.random() * 2 - 1) * RANGE_Y;
+
+  const circle = document.getElementById("focusCircle");
+
+  // Convert normalized coords to screen space
+  const xPx = (SWEET_SPOT_X + 0.5) * window.innerWidth;
+  const yPx = (0.5 - SWEET_SPOT_Y) * window.innerHeight;
+
+  circle.style.left = `${xPx}px`;
+  circle.style.top = `${yPx}px`;
+
+  focusAchieved = false;
+  focusStartTime = null;
+  lastFocusQuality = 0;
+
+}
+
+
+  function startTask() {
+    document.getElementById("instructionPanel").style.display = "none";
+    document.getElementById("focusDisplay").style.display = "block";
+
+    const level = ExperimentSystem.getCurrentLevel();
+    setParticleCount(level.particleCount);
+    updateLevelDisplay();
+
+    setRandomFocusTarget();
+
+    taskActive = true;
+    taskStartTime = performance.now();
+    focusStartTime = null;
+    focusAchieved = false;
+    focusLosses = 0;
+    lastFocusQuality = 0;
+  }
+
+  function completeTask() {
+    if (!taskActive) return;
+    taskActive = false;
+
+    const totalTime = (performance.now() - taskStartTime) / 1000;
+    const maintenanceTime = focusStartTime ? (performance.now() - focusStartTime) / 1000 : 0;
+
+    document.getElementById("focusDisplay").style.display = "none";
+    document.getElementById("resultsPanel").style.display = "block";
+
+    document.getElementById("timeToFocus").textContent = "0.00";
+    document.getElementById("maintenanceTime").textContent = maintenanceTime.toFixed(2);
+    document.getElementById("focusLosses").textContent = focusLosses;
+    
+    const level = ExperimentSystem.getCurrentLevel();
+    document.getElementById("resultLevel").textContent = `${level.level} - ${level.name}`;
+  }
+
+  window.submitResults = function() {
+    const comfortRating = parseInt(document.getElementById("comfortRating").value);
+
+    const maintenanceTime = parseFloat(document.getElementById("maintenanceTime").textContent);
+
+    ExperimentSystem.logTask({
+      timeToFocus: 0,
+      maintenanceTime: maintenanceTime,
+      focusLosses: focusLosses,
+      comfortRating: comfortRating,
+      totalTime: maintenanceTime,
+      success: maintenanceTime >= 3
+    });
+
+    document.getElementById("resultsPanel").style.display = "none";
+    ExperimentSystem.nextLevel();
+
+    if (ExperimentSystem.currentLevelIndex < ExperimentSystem.levels.length) {
+      startTask();
+    } else {
+      const resultsText = "All levels completed!\n\n" + ExperimentSystem.exportLog();
+      alert(resultsText);
+      console.log("Task log:", ExperimentSystem.taskLog);
+      ExperimentSystem.currentLevelIndex = 0;
+      ExperimentSystem.taskLog = [];
+      document.getElementById("instructionPanel").style.display = "block";
+      updateLevelDisplay();
+    }
+  };
+
+  document.getElementById("comfortRating").addEventListener("input", (e) => {
+    document.getElementById("comfortValue").textContent = e.target.value;
+  });
+
+  // ==================== EYE TRACKING ====================
+
+  let eyeX = 0, eyeY = 0;
+
+  const socket = new WebSocket("ws://localhost:8765/");
+  socket.onopen = () => {
+    document.getElementById("connection-status").textContent = "Connected";
+    document.getElementById("connection-status").style.color = "lightgreen";
+  };
+
+  socket.onmessage = (ev) => {
+    try {
+      const d = JSON.parse(ev.data);
+      eyeX = d.x;
+      eyeY = d.y;
+      document.getElementById("gaze-direction").textContent = d.direction || "-";
+      document.getElementById("gaze-position").textContent = `${eyeX.toFixed(2)}, ${eyeY.toFixed(2)}`;
+    } catch (e) {}
+  };
+
+  socket.onclose = () => {
+    document.getElementById("connection-status").textContent = "Disconnected";
+    document.getElementById("connection-status").style.color = "red";
+  };
+
+  let mouseX = 0, mouseY = 0;
+  document.addEventListener("mousemove", e => {
+    mouseX = (e.clientX / window.innerWidth) - 0.5;
+    mouseY = (e.clientY / window.innerHeight) - 0.5;
+  });
+
+  // ==================== ANIMATION LOOP ====================
+
+  let smoothX = 0, smoothY = 0;
+  const smoothing = 0.12;
+
+  function animate() {
+    requestAnimationFrame(animate);
+
+    const ctrlX = (socket.readyState === 1) ? eyeX * 0.7 : mouseX;
+    const ctrlY = (socket.readyState === 1) ? eyeY * 0.7 : -mouseY;
+
+    smoothX += (ctrlX - smoothX) * smoothing * responsiveness;
+    smoothY += (ctrlY - smoothY) * smoothing * responsiveness;
+
+    const gazeCursor = document.getElementById("gazeCursor");
+
+    // Only show the red dot when eye-tracking is active
+    if (socket.readyState === 1) {
+    gazeCursor.style.display = "block";
+
+    // Smooth the raw focus signal (ctrlX/Y) for visual stability
+    cursorX += (ctrlX - cursorX) * CURSOR_SMOOTHING;
+    cursorY += (ctrlY - cursorY) * CURSOR_SMOOTHING;
+
+    // Map from focus space to screen pixels
+    const gazeXpx = (cursorX + 0.5) * window.innerWidth;
+    const gazeYpx = (0.5 - cursorY) * window.innerHeight;
+
+    gazeCursor.style.left = `${gazeXpx}px`;
+    gazeCursor.style.top = `${gazeYpx}px`;
+    } else {
+    gazeCursor.style.display = "none";
+    }
+
+
+    camera.rotation.y = smoothX * 0.3;
+    camera.rotation.x = smoothY * 0.3;
+    camera.position.x = smoothX * 2;
+    camera.position.y = smoothY * 2;
+
+    const gazeColor = getGazeColor(smoothX, smoothY);
+
+    cubes.forEach((c, i) => {
+      c.mesh.position.x = cubePos[i][0] + smoothX * c.speed * responsiveness;
+      c.mesh.position.y = cubePos[i][1] + smoothY * c.speed * responsiveness;
+      c.mat.color.copy(gazeColor);
+    });
+
+    // Animate particles
+    particles.forEach(p => {
+      p.material.color.copy(gazeColor);
+
+      p.position.x += p.velocity.x;
+      p.position.y += p.velocity.y;
+      p.position.z += p.velocity.z;
+
+      if (p.position.x > 7.5) p.position.x = -7.5;
+      if (p.position.x < -7.5) p.position.x = 7.5;
+      if (p.position.y > 7.5) p.position.y = -7.5;
+      if (p.position.y < -7.5) p.position.y = 7.5;
+      if (p.position.z > 7.5) p.position.z = -7.5;
+      if (p.position.z < -7.5) p.position.z = 7.5;
+    });
+
+    // ==================== TASK LOGIC ====================
+    if (taskActive) {
+      const focusQuality = calculateFocusQuality(ctrlX, ctrlY);
+      updateFocusDisplay(focusQuality);
+
+      if (focusQuality > FOCUS_THRESHOLD) {
+        if (!focusAchieved) {
+          focusAchieved = true;
+          focusStartTime = performance.now();
+        }
+
+        const focusTime = performance.now() - focusStartTime;
+        if (focusTime >= REQUIRED_FOCUS_TIME) {
+          completeTask();
+        }
+      } else {
+        if (focusAchieved) {
+          focusLosses++;
+          focusAchieved = false;
+          focusStartTime = null;
+        }
+      }
+
+      lastFocusQuality = focusQuality;
+    }
+
+    renderer.render(scene, camera);
+  }
+
+  animate();
+
+  window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  document.addEventListener("DOMContentLoaded", () => {
+    updateLevelDisplay();
+    document.getElementById("instructionPanel").style.display = "block";
+  });
+
+</script>
+
+</body>
+</html>

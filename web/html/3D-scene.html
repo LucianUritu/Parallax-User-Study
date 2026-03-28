@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Three.js Parallax Cosmic Scene</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+
+<body>
+
+<!-- Load Three.js -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.0/build/three.min.js"></script>
+
+<script>
+
+// Scene setup
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(
+    75,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    2000
+);
+camera.position.z = 5;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+
+// Layer Creation
+
+const loader = new THREE.TextureLoader();
+
+function createLayer(filename, zPos, visibleHeight) {
+    const tex = loader.load(filename);
+    tex.colorSpace = THREE.SRGBColorSpace;
+
+    const aspect = 1920 / 1080;
+    const height = visibleHeight;
+    const width  = height * aspect;
+
+    const geo = new THREE.PlaneGeometry(width, height);
+    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.z = zPos;
+    scene.add(mesh);
+    return mesh;
+}
+
+
+// Auto-scaling background layer
+
+function createAutoBackground(filename, zPos, scale=1.05) {
+    const tex = loader.load(filename);
+    tex.colorSpace = THREE.SRGBColorSpace;
+
+    const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.MeshBasicMaterial({ map: tex, transparent: true })
+    );
+    mesh.position.z = zPos;
+    scene.add(mesh);
+
+    function resizeBackground() {
+        const dist = Math.abs(zPos - camera.position.z);
+        const vFov = camera.fov * Math.PI / 180;
+        const height = 2 * Math.tan(vFov / 2) * dist;
+        const width = height * camera.aspect;
+
+        mesh.scale.set(width * scale, height * scale, 1);
+    }
+
+    resizeBackground();
+    window.addEventListener("resize", resizeBackground);
+
+    return mesh;
+}
+
+
+// Create Layers
+// Background uses auto-scaling version:
+const backgroundLayer = createAutoBackground("background.png", -12, 1.05);
+
+const cloudLayer      = createLayer("cloud.png",      -10, 20);
+const galaxyLayer     = createLayer("galaxy.png",     -8,  5);
+const planetLayer     = createLayer("planet.png",     -12,  9);
+const satelliteLayer  = createLayer("satellite.png",  -3, 3);
+
+
+// Base Positions
+
+const backgroundPos = { x: 0,    y: 0 };
+const cloudPos      = { x: -1.5, y: 1.0 };
+const galaxyPos     = { x: 12,  y: 2.0 };
+const planetPos     = { x: 2.3,  y:-0.9 };
+const satellitePos  = { x:-1.8,  y: 1.4 };
+
+
+// Eye Tracking + Mouse Fallback
+
+let eyeX = 0, eyeY = 0;
+let mouseX = 0, mouseY = 0;
+let smoothX = 0, smoothY = 0;
+
+document.addEventListener("mousemove", (e) => {
+    mouseX = (e.clientX / window.innerWidth) - 0.5;
+    mouseY = (e.clientY / window.innerHeight) - 0.5;
+});
+
+const socket = new WebSocket("ws://localhost:8765/");
+
+socket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    eyeX = data.x;
+    eyeY = data.y;
+};
+
+
+// Animation Loop
+
+function animate() {
+    requestAnimationFrame(animate);
+
+    const useEyeTracking = (socket.readyState === WebSocket.OPEN);
+
+    const targetX = useEyeTracking ? eyeX : mouseX;
+    const targetY = useEyeTracking ? -eyeY : -mouseY;
+
+    smoothX += (targetX - smoothX) * 0.07;
+    smoothY += (targetY - smoothY) * 0.07;
+
+    const px = smoothX;
+    const py = smoothY;
+
+    satelliteLayer.position.x = satellitePos.x + px * 0.8;
+    satelliteLayer.position.y = satellitePos.y + py * 0.6;
+
+    planetLayer.position.x = planetPos.x + px * 0.5;
+    planetLayer.position.y = planetPos.y + py * 0.35;
+
+    galaxyLayer.position.x = galaxyPos.x + px * 0.3;
+    galaxyLayer.position.y = galaxyPos.y + py * 0.25;
+
+    cloudLayer.position.x = cloudPos.x + px * 0.15;
+    cloudLayer.position.y = cloudPos.y + py * 0.12;
+
+    backgroundLayer.position.x = backgroundPos.x + px * 0.07;
+    backgroundLayer.position.y = backgroundPos.y + py * 0.05;
+
+    renderer.render(scene, camera);
+}
+
+animate();
+
+
+// Resize Handling
+
+window.addEventListener("resize", () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+
+</body>
+</html>
